@@ -1,0 +1,1 @@
+ALTER TABLE passengers ADD COLUMN tags TEXT[] DEFAULT '{}';

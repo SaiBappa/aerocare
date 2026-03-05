@@ -416,7 +416,7 @@ async function startServer() {
   // ───── Building QR Codes & Scanning ─────
   app.get('/api/building/qr-codes', async (req, res) => {
     try {
-      const { data: codes, error } = await supabase.from('building_qr_codes').select('*').order('type').order('id');
+      const { data: codes, error } = await supabase.from('building_qr_codes').select('*, locations(name)').order('type').order('id');
       if (error) throw error;
       res.json(codes || []);
     } catch (error) {
@@ -437,7 +437,7 @@ async function startServer() {
   });
 
   app.post('/api/building/qr-codes/generate', async (req, res) => {
-    const { type, label, expires_at } = req.body;
+    const { type, label, location_id, expires_at } = req.body;
     if (!['checkin', 'checkout'].includes(type)) {
       return res.status(400).json({ error: 'Type must be checkin or checkout' });
     }
@@ -446,8 +446,8 @@ async function startServer() {
       const now = new Date().toISOString();
       const { data: newCode, error } = await supabase
         .from('building_qr_codes')
-        .insert({ code, type, label: label || '', created_at: now, expires_at: expires_at || null })
-        .select()
+        .insert({ code, type, label: label || '', location_id: location_id || null, created_at: now, expires_at: expires_at || null })
+        .select('*, locations(name)')
         .single();
       if (error) throw error;
       res.json({ success: true, qr_code: newCode });
@@ -481,6 +481,7 @@ async function startServer() {
         success: true,
         message: 'QR Pass renewed successfully.',
         type: 'renewal',
+        location: label,
         passenger: {
           name: passenger.name,
           passport_number: passenger.passport_number,
@@ -520,6 +521,7 @@ async function startServer() {
       success: true,
       message: isCheckin ? 'Checked in successfully.' : 'Checked out successfully.',
       type: isCheckin ? 'checkin' : 'checkout',
+      location: label,
       passenger: {
         name: passenger.name,
         passport_number: passenger.passport_number,
@@ -540,14 +542,17 @@ async function startServer() {
       const { data: passenger } = await supabase.from('passengers').select('*').eq('qr_token', passenger_qr_token).single();
       if (!passenger) return res.status(404).json({ error: 'Invalid passenger QR token' });
 
-      const { data: buildingQR } = await supabase.from('building_qr_codes').select('*').eq('code', building_qr_code).eq('active', 1).single();
+      const { data: buildingQR } = await supabase.from('building_qr_codes').select('*, locations(name)').eq('code', building_qr_code).eq('active', 1).single();
       if (!buildingQR) return res.status(404).json({ error: 'Invalid or inactive building QR code' });
 
       if (buildingQR.expires_at && new Date() > new Date(buildingQR.expires_at)) {
         return res.status(400).json({ error: 'This building QR code has expired' });
       }
 
-      const result = await processCheckinCheckout(passenger, buildingQR.type, 0, buildingQR.label || buildingQR.code);
+      const locId = buildingQR.location_id || 0;
+      const locName = buildingQR.locations?.name ? `${buildingQR.locations.name} - ${buildingQR.label}` : (buildingQR.label || buildingQR.code);
+
+      const result = await processCheckinCheckout(passenger, buildingQR.type, locId, locName);
       res.json(result);
     } catch (error: any) {
       console.error('Scan processing error:', error);
@@ -812,19 +817,6 @@ async function startServer() {
       return res.status(400).json({ error: 'Nationality is required' });
     }
 
-    // Check for duplicate passport (using nationality + passport_number)
-    if (nationality && passport_number) {
-      const { data: existing } = await supabase
-        .from('passengers')
-        .select('id')
-        .ilike('nationality', nationality.trim())
-        .ilike('passport_number', passport_number.trim())
-        .single();
-      if (existing) {
-        return res.status(409).json({ error: 'A passenger with this nationality and passport number already exists. Please use the login page.' });
-      }
-    }
-
     // Validate companions if provided
     const companionList: Array<{ type: string; nationality: string; passport_number: string }> = [];
     if (companions && Array.isArray(companions)) {
@@ -840,6 +832,39 @@ async function startServer() {
           return res.status(400).json({ error: 'Passport number is required for all companions' });
         }
         companionList.push({ type: cType, nationality: cNationality, passport_number: cPassport });
+      }
+    }
+
+    // Check for duplicate passport across both passengers and companions
+    const allChecking = [
+      { nationality: nationality.trim(), passport_number: passport_number.trim() },
+      ...companionList
+    ];
+
+    const uniquePassports = new Set(allChecking.map(p => `${p.nationality.toLowerCase()}-${p.passport_number.toLowerCase()}`));
+    if (uniquePassports.size < allChecking.length) {
+      return res.status(400).json({ error: 'Duplicate passport numbers found in the request' });
+    }
+
+    for (const person of allChecking) {
+      if (!person.nationality || !person.passport_number) continue;
+
+      const { data: existingPass } = await supabase
+        .from('passengers')
+        .select('id')
+        .ilike('nationality', person.nationality)
+        .ilike('passport_number', person.passport_number)
+        .single();
+
+      const { data: existingComp } = await supabase
+        .from('companions')
+        .select('id')
+        .ilike('nationality', person.nationality)
+        .ilike('passport_number', person.passport_number)
+        .single();
+
+      if (existingPass || existingComp) {
+        return res.status(409).json({ error: 'If already registered, please request to check' });
       }
     }
 
@@ -866,6 +891,7 @@ async function startServer() {
         final_destination: final_destination ? final_destination.trim() : null,
         qr_token,
         qr_generated_at,
+        status: 'checked-in',
         companion_adults: companionAdults,
         companion_children: companionChildren
       }).select().single();
@@ -885,14 +911,39 @@ async function startServer() {
       }
 
       const totalGroup = 1 + companionList.length;
-      // Log activity
-      await supabase.from('activity_log').insert({
-        type: 'registration',
-        description: `${name.trim()} registered as a new passenger (group of ${totalGroup})`,
+      const timestamp = new Date().toISOString();
+
+      let locName = null;
+      if (location_id) {
+        const { data: loc } = await supabase.from('locations').select('name').eq('id', location_id).single();
+        locName = loc?.name;
+      }
+
+      await supabase.from('transactions').insert({
         passenger_id: passengerId,
-        passenger_name: name.trim(),
-        timestamp: new Date().toISOString()
+        type: 'check-in',
+        location_id: location_id || null,
+        timestamp
       });
+
+      // Log activity
+      await supabase.from('activity_log').insert([
+        {
+          type: 'registration',
+          description: `${name.trim()} registered as a new passenger (group of ${totalGroup})`,
+          passenger_id: passengerId,
+          passenger_name: name.trim(),
+          timestamp
+        },
+        {
+          type: 'check-in',
+          description: `${name.trim()} checked in${locName ? ` at ${locName}` : ''} automatically upon registration`,
+          passenger_id: passengerId,
+          passenger_name: name.trim(),
+          metadata: JSON.stringify({ location_id: location_id || null }),
+          timestamp
+        }
+      ]);
 
       res.json({ success: true, qr_token, passenger_id: passengerId });
     } catch (error) {
@@ -925,6 +976,24 @@ async function startServer() {
       return res.status(400).json({ error: 'Passport number is required for companion' });
     }
     const cType = type === 'child' ? 'child' : 'adult';
+
+    const { data: existingPass } = await supabase
+      .from('passengers')
+      .select('id')
+      .ilike('nationality', cNationality.trim())
+      .ilike('passport_number', cPassport.trim())
+      .single();
+
+    const { data: existingComp } = await supabase
+      .from('companions')
+      .select('id')
+      .ilike('nationality', cNationality.trim())
+      .ilike('passport_number', cPassport.trim())
+      .single();
+
+    if (existingPass || existingComp) {
+      return res.status(409).json({ error: 'If already registered, please request to check' });
+    }
 
     try {
       await supabase.from('companions').insert({
@@ -1016,10 +1085,20 @@ async function startServer() {
 
 
     // Fetch broadcast messages relevant to this passenger
+    const conditions = ['target_type.eq.all'];
+    if (passenger.departure_airline) {
+      const spAirline = passenger.departure_airline.replace(/"/g, '');
+      conditions.push(`and(target_type.eq.airline,target_airline.ilike."${spAirline}")`);
+    }
+    if (passenger.final_destination) {
+      const spDest = passenger.final_destination.replace(/"/g, '');
+      conditions.push(`and(target_type.eq.destination,target_destination.ilike."${spDest}")`);
+    }
+
     const { data: broadcastMessages } = await supabase
       .from('broadcast_messages')
       .select('*')
-      .or(`target_type.eq.all,and(target_type.eq.airline,target_airline.ilike.${passenger.departure_airline || ''}),and(target_type.eq.destination,target_destination.ilike.${passenger.final_destination || ''})`)
+      .or(conditions.join(','))
       .order('sent_at', { ascending: false });
 
     // Fetch QR expiry setting
@@ -1143,7 +1222,10 @@ async function startServer() {
   app.get('/api/dashboard', async (req, res) => {
     const { count: totalPassengers } = await supabase.from('passengers').select('*', { count: 'exact', head: true });
     const { count: checkedIn } = await supabase.from('passengers').select('*', { count: 'exact', head: true }).eq('status', 'checked-in');
-    const { count: messagesCount } = await supabase.from('messages').select('*', { count: 'exact', head: true }).eq('sender', 'passenger');
+
+    // Calculate open requests by finding unique passengers with an 'open' status message
+    const { data: openMessages } = await supabase.from('messages').select('passenger_id').eq('status', 'open');
+    const messagesCount = new Set((openMessages || []).map(m => m.passenger_id)).size;
 
     const { data: locations } = await supabase.from('locations').select('*');
     const { data: checkedInPassengers } = await supabase.from('passengers').select('location_id').eq('status', 'checked-in');
@@ -1414,8 +1496,20 @@ async function startServer() {
     }
   });
 
+  // ───── Dropdown Options Cache ─────
+  let dropdownCache: { data: Record<string, string[]>, timestamp: number } | null = null;
+  const DROPDOWN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   // ───── Dropdown Options (Public — active only) ─────
   app.get('/api/dropdown-options', async (req, res) => {
+    // Add cache headers for browser
+    res.setHeader('Cache-Control', 'public, max-age=300');
+
+    // Return from in-memory cache if valid
+    if (dropdownCache && Date.now() - dropdownCache.timestamp < DROPDOWN_CACHE_TTL) {
+      return res.json(dropdownCache.data);
+    }
+
     try {
       const { data: options } = await supabase
         .from('dropdown_options')
@@ -1430,6 +1524,12 @@ async function startServer() {
         if (!grouped[opt.category]) grouped[opt.category] = [];
         grouped[opt.category].push(opt.label);
       }
+
+      // Update cache
+      dropdownCache = {
+        data: grouped,
+        timestamp: Date.now()
+      };
 
       res.json(grouped);
     } catch (error) {
@@ -1493,6 +1593,9 @@ async function startServer() {
         throw error;
       }
 
+      // Invalidate cache
+      dropdownCache = null;
+
       res.status(201).json(newOption);
     } catch (error) {
       console.error('Failed to create dropdown option:', error);
@@ -1534,6 +1637,10 @@ async function startServer() {
         }
         throw error;
       }
+
+      // Invalidate cache
+      dropdownCache = null;
+
       res.json(updated);
     } catch (error) {
       console.error('Failed to update dropdown option:', error);
@@ -1554,6 +1661,10 @@ async function startServer() {
 
     try {
       await supabase.from('dropdown_options').delete().eq('id', id);
+
+      // Invalidate cache
+      dropdownCache = null;
+
       res.json({ success: true, message: 'Dropdown option deleted successfully' });
     } catch (error) {
       console.error('Failed to delete dropdown option:', error);
