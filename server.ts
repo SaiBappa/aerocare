@@ -249,8 +249,8 @@ async function startServer() {
 
     const { display_name, password, role, active } = req.body;
 
-    if (role !== undefined && !['staff', 'dashboard', 'admin'].includes(role)) {
-      return res.status(400).json({ error: 'Role must be one of: staff, dashboard, admin' });
+    if (role !== undefined && !['staff', 'dashboard', 'admin', 'stakeholder'].includes(role)) {
+      return res.status(400).json({ error: 'Role must be one of: staff, dashboard, admin, stakeholder' });
     }
 
     try {
@@ -315,8 +315,8 @@ async function startServer() {
     if (!password || typeof password !== 'string' || password.length === 0) {
       return res.status(400).json({ error: 'Password is required' });
     }
-    if (!role || !['staff', 'dashboard', 'admin'].includes(role)) {
-      return res.status(400).json({ error: 'Role must be one of: staff, dashboard, admin' });
+    if (!role || !['staff', 'dashboard', 'admin', 'stakeholder'].includes(role)) {
+      return res.status(400).json({ error: 'Role must be one of: staff, dashboard, admin, stakeholder' });
     }
     if (!display_name || typeof display_name !== 'string' || display_name.trim().length === 0) {
       return res.status(400).json({ error: 'Display name is required' });
@@ -2043,6 +2043,17 @@ async function startServer() {
         query = query.or(`name.ilike.${s},passport_number.ilike.${s},flight_number.ilike.${s},country.ilike.${s},tags.ilike.${s}`);
       }
 
+      // Filter by exclude_from_reports
+      const exclude_filter = req.query.exclude_filter as string;
+      const hide_excluded = req.query.hide_excluded === 'true';
+
+      if (exclude_filter === 'excluded') {
+        query = query.eq('exclude_from_reports', true);
+      } else if (exclude_filter === 'hidden' || hide_excluded) {
+        query = query.eq('exclude_from_reports', false);
+      }
+      // If exclude_filter is 'all', do not add any condition and show both.
+
       if (status && typeof status === 'string' && status !== 'all') {
         query = query.eq('status', status);
       }
@@ -2165,6 +2176,31 @@ async function startServer() {
     }
   });
 
+  // ───── Exclude Passenger from Reports ─────
+  app.patch('/api/admin/passengers/:id/exclude', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid passenger ID' });
+    }
+
+    try {
+      const { data: passenger } = await supabase.from('passengers').select('*').eq('id', id).single();
+      if (!passenger) {
+        return res.status(404).json({ error: 'Passenger not found' });
+      }
+
+      const { exclude_from_reports } = req.body;
+      const newValue = !!exclude_from_reports;
+
+      await supabase.from('passengers').update({ exclude_from_reports: newValue }).eq('id', id);
+
+      res.json({ success: true, exclude_from_reports: newValue });
+    } catch (error) {
+      console.error('Failed to update passenger exclude status:', error);
+      res.status(500).json({ error: 'Failed to update passenger exclude status' });
+    }
+  });
+
   // ───── Update Passenger Tags ─────
   app.patch('/api/admin/passengers/:id/tags', async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -2190,11 +2226,68 @@ async function startServer() {
     }
   });
 
+  // ───── Update Passenger Details ─────
+  app.patch('/api/admin/passengers/:id/details', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid passenger ID' });
+    }
+
+    try {
+      const { data: passenger } = await supabase.from('passengers').select('*').eq('id', id).single();
+      if (!passenger) {
+        return res.status(404).json({ error: 'Passenger not found' });
+      }
+
+      const {
+        name,
+        country,
+        passport_number,
+        nationality,
+        departure_airline,
+        departure_date,
+        final_destination,
+        flight_number
+      } = req.body;
+
+      const updates: any = {};
+      if (name !== undefined) updates.name = name;
+      if (country !== undefined) updates.country = country;
+      if (passport_number !== undefined) updates.passport_number = passport_number;
+      if (nationality !== undefined) updates.nationality = nationality;
+      if (departure_airline !== undefined) updates.departure_airline = departure_airline;
+      if (departure_date !== undefined) updates.departure_date = departure_date;
+      if (final_destination !== undefined) updates.final_destination = final_destination;
+      if (flight_number !== undefined) updates.flight_number = flight_number;
+
+      if (Object.keys(updates).length > 0) {
+        const { error } = await supabase.from('passengers').update(updates).eq('id', id);
+        if (error) throw error;
+
+        await supabase.from('activity_log').insert({
+          type: 'details-update',
+          description: `${passenger.name} details updated by admin`,
+          passenger_id: passenger.id,
+          passenger_name: passenger.name,
+          metadata: { updates },
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json({ success: true, updates });
+    } catch (error) {
+      console.error('Failed to update passenger details:', error);
+      res.status(500).json({ error: 'Failed to update passenger details' });
+    }
+  });
+
   app.get('/api/admin/passengers/stats', async (req, res) => {
     try {
       const { date_from, date_to } = req.query;
 
       let query = supabase.from('passengers').select('status, departure_airline, nationality, final_destination, qr_generated_at');
+
+      query = query.eq('exclude_from_reports', false);
 
       if (date_from && typeof date_from === 'string') {
         query = query.gte('qr_generated_at', date_from);
@@ -2252,7 +2345,7 @@ async function startServer() {
 
       const { count: totalMessages } = await supabase.from('messages').select('*', { count: 'exact', head: true });
 
-      const { data: allPassengers } = await supabase.from('passengers').select('departure_airline, nationality, final_destination, tags');
+      const { data: allPassengers } = await supabase.from('passengers').select('departure_airline, nationality, final_destination, tags').eq('exclude_from_reports', false);
       const allAirlines = new Set(allPassengers?.map(p => p.departure_airline).filter(Boolean));
       const allNationalities = new Set(allPassengers?.map(p => p.nationality).filter(Boolean));
       const allDestinations = new Set(allPassengers?.map(p => p.final_destination).filter(Boolean));
@@ -2287,7 +2380,7 @@ async function startServer() {
 
   app.get('/api/stakeholder/stats', async (req, res) => {
     try {
-      const { data: passengers, error } = await supabase.from('passengers').select('id, status, nationality, departure_airline, final_destination, country, location_id, qr_generated_at, departure_date');
+      const { data: passengers, error } = await supabase.from('passengers').select('id, status, nationality, departure_airline, final_destination, country, location_id, qr_generated_at, departure_date').eq('exclude_from_reports', false);
       if (error) throw error;
       const pxList = passengers || [];
 

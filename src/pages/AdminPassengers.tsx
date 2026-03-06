@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
     Search, Filter, ChevronLeft, ChevronRight, ArrowUpDown,
     Plane, Globe, MapPin, UserCheck, UserX,
-    Tag, Eye, X, Calendar, TrendingUp, BarChart3, Users, Activity, Download
+    Tag, Eye, X, Calendar, TrendingUp, BarChart3, Users, Activity, Download, Edit, Save
 } from 'lucide-react';
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -34,6 +34,7 @@ interface Passenger {
     location_name: string | null;
     message_count: number;
     tags?: string | null;
+    exclude_from_reports?: boolean;
 }
 
 interface Pagination {
@@ -71,6 +72,7 @@ interface Filters {
     tags: string[];
     dateFrom: string;
     dateTo: string;
+    excludeStatus: string;
 }
 
 // ─── Palette ───
@@ -101,6 +103,39 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
     const [locationError, setLocationError] = useState('');
     const [tags, setTags] = useState(passenger.tags || '');
     const [tagsSaving, setTagsSaving] = useState(false);
+    const [excludeFromReports, setExcludeFromReports] = useState(!!passenger.exclude_from_reports);
+    const [excludeSaving, setExcludeSaving] = useState(false);
+    const [isEditing, setIsEditing] = useState(false);
+    const [detailsSaving, setDetailsSaving] = useState(false);
+    const [editForm, setEditForm] = useState({
+        name: passenger.name || '',
+        country: passenger.country || '',
+        passport_number: passenger.passport_number || '',
+        nationality: passenger.nationality || '',
+        departure_airline: passenger.departure_airline || '',
+        departure_date: passenger.departure_date || '',
+        final_destination: passenger.final_destination || '',
+        flight_number: passenger.flight_number || '',
+    });
+
+    const handleSaveDetails = async () => {
+        if (!canWrite) return;
+        setDetailsSaving(true);
+        try {
+            const res = await fetch(`/api/admin/passengers/${passenger.id}/details`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(editForm),
+            });
+            if (!res.ok) throw new Error('Failed to update passenger details');
+            setIsEditing(false);
+            if (onUpdate) onUpdate();
+        } catch (err) {
+            console.error('Failed to update details:', err);
+        } finally {
+            setDetailsSaving(false);
+        }
+    };
 
     useEffect(() => {
         fetch('/api/locations')
@@ -167,6 +202,26 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
         }
     };
 
+    const handleExcludeUpdate = async () => {
+        if (!canWrite) return;
+        setExcludeSaving(true);
+        const newValue = !excludeFromReports;
+        try {
+            const res = await fetch(`/api/admin/passengers/${passenger.id}/exclude`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ exclude_from_reports: newValue }),
+            });
+            if (!res.ok) throw new Error('Failed to update exclude status');
+            setExcludeFromReports(newValue);
+            if (onUpdate) onUpdate();
+        } catch (err) {
+            console.error('Failed to update passenger exclude status:', err);
+        } finally {
+            setExcludeSaving(false);
+        }
+    };
+
     const fields = [
         { label: 'Full Name', value: passenger.name, icon: Users },
         { label: 'Country', value: passenger.country, icon: Globe },
@@ -194,9 +249,21 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
                             <span className="text-xs text-slate-400">ID #{passenger.id}</span>
                         </div>
                     </div>
-                    <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
-                        <X className="h-5 w-5 text-slate-500" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {canWrite && !isEditing && (
+                            <button onClick={() => setIsEditing(true)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+                                <Edit className="h-5 w-5 text-indigo-500" />
+                            </button>
+                        )}
+                        {canWrite && isEditing && (
+                            <button onClick={handleSaveDetails} disabled={detailsSaving} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+                                {detailsSaving ? <span className="animate-spin h-5 w-5 border border-indigo-500 border-t-transparent rounded-full inline-block" /> : <Save className="h-5 w-5 text-indigo-600" />}
+                            </button>
+                        )}
+                        <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+                            <X className="h-5 w-5 text-slate-500" />
+                        </button>
+                    </div>
                 </div>
 
                 <div className="p-6 border-b border-slate-100">
@@ -210,6 +277,18 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
                 <div className="p-6 space-y-4">
                     {fields.map((f) => {
                         const Icon = f.icon;
+                        const fieldMap: Record<string, keyof typeof editForm> = {
+                            'Full Name': 'name',
+                            'Country': 'country',
+                            'Passport Number': 'passport_number',
+                            'Nationality': 'nationality',
+                            'Departure Airline': 'departure_airline',
+                            'Departure Date': 'departure_date',
+                            'Final Destination': 'final_destination',
+                            'Flight Number': 'flight_number'
+                        };
+                        const fieldKey = fieldMap[f.label];
+
                         return (
                             <div key={f.label} className="flex items-start gap-3">
                                 <div className="h-9 w-9 rounded-lg bg-slate-50 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -217,7 +296,16 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
                                 </div>
                                 <div className="flex-1 min-w-0">
                                     <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">{f.label}</p>
-                                    <p className="text-sm font-medium text-slate-800 mt-0.5 truncate">{f.value || '—'}</p>
+                                    {isEditing && fieldKey ? (
+                                        <input
+                                            type={f.label === 'Departure Date' ? 'date' : 'text'}
+                                            value={editForm[fieldKey] || ''}
+                                            onChange={(e) => setEditForm(prev => ({ ...prev, [fieldKey]: e.target.value }))}
+                                            className="w-full mt-1.5 px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 bg-white"
+                                        />
+                                    ) : (
+                                        <p className="text-sm font-medium text-slate-800 mt-0.5 truncate">{f.value || '—'}</p>
+                                    )}
                                 </div>
                             </div>
                         );
@@ -292,6 +380,31 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
                             </div>
                         </div>
                     </div>
+
+                    {/* Exclude from reports — Toggle */}
+                    <div className="flex items-start gap-3">
+                        <div className="h-9 w-9 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <UserX className="h-4 w-4 text-red-500" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Exclude From Reports</p>
+                            <div className="mt-2 flex items-center gap-3">
+                                <button
+                                    onClick={handleExcludeUpdate}
+                                    disabled={excludeSaving || !canWrite}
+                                    className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${excludeFromReports ? 'bg-indigo-600' : 'bg-slate-200'}`}
+                                    role="switch"
+                                    aria-checked={excludeFromReports}
+                                >
+                                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${excludeFromReports ? 'translate-x-4' : 'translate-x-0'}`} />
+                                </button>
+                                <span className="text-sm text-slate-600">
+                                    {excludeFromReports ? 'Excluded' : 'Included'}
+                                    {excludeSaving && <span className="ml-2 text-xs text-indigo-500">Saving...</span>}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div >
@@ -316,7 +429,7 @@ export default function AdminPassengers() {
     const [passengers, setPassengers] = useState<Passenger[]>([]);
     const [pagination, setPagination] = useState<Pagination>({ total: 0, page: 1, per_page: 25, total_pages: 0 });
     const [loading, setLoading] = useState(true);
-    const [filters, setFilters] = useState<Filters>({ search: '', status: 'all', airline: 'all', nationality: 'all', destination: 'all', tags: [], dateFrom: '', dateTo: '' });
+    const [filters, setFilters] = useState<Filters>({ search: '', status: 'all', airline: 'all', nationality: 'all', destination: 'all', tags: [], dateFrom: '', dateTo: '', excludeStatus: 'hidden' });
     const [sortBy, setSortBy] = useState('id');
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
     const [selectedPassenger, setSelectedPassenger] = useState<Passenger | null>(null);
@@ -364,6 +477,7 @@ export default function AdminPassengers() {
             if (filters.tags.length > 0) params.set('tags', filters.tags.join(','));
             if (filters.dateFrom) params.set('date_from', filters.dateFrom);
             if (filters.dateTo) params.set('date_to', filters.dateTo);
+            params.set('exclude_filter', filters.excludeStatus);
 
             const res = await fetch(`/api/admin/passengers?${params}`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -396,6 +510,7 @@ export default function AdminPassengers() {
             if (filters.tags.length > 0) params.set('tags', filters.tags.join(','));
             if (filters.dateFrom) params.set('date_from', filters.dateFrom);
             if (filters.dateTo) params.set('date_to', filters.dateTo);
+            params.set('exclude_filter', filters.excludeStatus);
 
             const res = await fetch(`/api/admin/passengers?${params}`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -447,11 +562,11 @@ export default function AdminPassengers() {
     };
 
     const resetFilters = () => {
-        setFilters({ search: '', status: 'all', airline: 'all', nationality: 'all', destination: 'all', tags: [], dateFrom: '', dateTo: '' });
+        setFilters({ search: '', status: 'all', airline: 'all', nationality: 'all', destination: 'all', tags: [], dateFrom: '', dateTo: '', excludeStatus: 'hidden' });
     };
 
     const activeFilterCount = [filters.status, filters.airline, filters.nationality, filters.destination]
-        .filter((v) => v !== 'all').length + (filters.search ? 1 : 0) + filters.tags.length + (filters.dateFrom ? 1 : 0) + (filters.dateTo ? 1 : 0);
+        .filter((v) => v !== 'all').length + (filters.search ? 1 : 0) + filters.tags.length + (filters.dateFrom ? 1 : 0) + (filters.dateTo ? 1 : 0) + (filters.excludeStatus !== 'hidden' ? 1 : 0);
 
     return (
         <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
@@ -838,6 +953,19 @@ export default function AdminPassengers() {
                                             ))}
                                         </div>
                                     )}
+                                </div>
+
+                                <div>
+                                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">Report Exclusions</label>
+                                    <select
+                                        value={filters.excludeStatus}
+                                        onChange={(e) => setFilters((p) => ({ ...p, excludeStatus: e.target.value }))}
+                                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 bg-white"
+                                    >
+                                        <option value="hidden">Hide Excluded</option>
+                                        <option value="all">Show All</option>
+                                        <option value="excluded">Only Excluded</option>
+                                    </select>
                                 </div>
                             </div>
                         )}

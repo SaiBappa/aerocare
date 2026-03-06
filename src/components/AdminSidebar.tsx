@@ -5,6 +5,7 @@ import {
     Activity, Megaphone, Users, Coffee, MessageSquare, Settings,
     ArrowUpRight, LayoutDashboard, BarChart2, LogOut
 } from 'lucide-react';
+import VersionHistory from './VersionHistory';
 
 type ActivePage = 'overview' | 'activity' | 'broadcast' | 'passengers' | 'support' | 'settings' | 'stakeholder';
 
@@ -106,6 +107,7 @@ export default function AdminSidebar({ activePage, headerActions }: AdminSidebar
                 </div>
             </nav>
 
+            <VersionHistory />
         </aside>
     );
 }

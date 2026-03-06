@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { toPng } from 'html-to-image';
 import { jsPDF } from 'jspdf';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
     PieChart, Pie, Cell, AreaChart, Area
@@ -9,7 +10,7 @@ import {
 import {
     Users, MapPin, Coffee, Globe, Plane, Navigation,
     TrendingUp, LayoutDashboard, Database, ShieldCheck, Clock,
-    Download, Image as ImageIcon
+    Download, Image as ImageIcon, LogOut
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -29,10 +30,17 @@ interface StakeholderStats {
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#14b8a6', '#64748b'];
 
 export default function StakeholderPortal() {
+    const { logout } = useAuth();
+    const navigate = useNavigate();
     const [stats, setStats] = useState<StakeholderStats | null>(null);
     const [loading, setLoading] = useState(true);
     const [isDownloading, setIsDownloading] = useState(false);
     const pdfRef = useRef<HTMLDivElement>(null);
+
+    const handleLogout = async () => {
+        await logout();
+        navigate('/');
+    };
 
     const downloadPDF = async () => {
         const input = pdfRef.current;
@@ -211,6 +219,14 @@ export default function StakeholderPortal() {
                             <span className="text-sm font-mono text-indigo-400">{format(new Date(), 'HH:mm:ss')}</span>
                         </div>
 
+                        <button
+                            onClick={handleLogout}
+                            className="flex items-center gap-2 px-4 py-3 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 rounded-xl font-medium transition-all shadow-sm"
+                            title="Sign Out"
+                        >
+                            <LogOut className="h-4 w-4" />
+                            <span className="text-sm hidden sm:inline">Sign Out</span>
+                        </button>
                     </div>
                 </header>
 

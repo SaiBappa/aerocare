@@ -27,6 +27,9 @@ export default function RequireAuth({ children, allowedRoles }: RequireAuthProps
         if (user.role === 'staff') {
             return <Navigate to="/staff" replace />;
         }
+        if (user.role === 'stakeholder') {
+            return <Navigate to="/stakeholder" replace />;
+        }
         return <Navigate to="/control" replace />;
     }
 

@@ -32,7 +32,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/s/:qr_code" element={<ScanProcessor />} />
-            <Route path="/stakeholder" element={<StakeholderPortal />} />
+            <Route path="/stakeholder" element={<RequireAuth><StakeholderPortal /></RequireAuth>} />
             <Route path="/passenger" element={<PassengerApp />} />
 
             <Route path="/passenger/login" element={<PassengerLogin />} />

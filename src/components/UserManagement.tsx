@@ -6,7 +6,7 @@ interface AppUser {
     id: string;
     email: string;
     display_name: string;
-    role: 'staff' | 'dashboard' | 'admin';
+    role: 'staff' | 'dashboard' | 'admin' | 'stakeholder';
     active: number;
 }
 
@@ -215,6 +215,7 @@ export default function UserManagement() {
                                 <option value="staff">Staff</option>
                                 <option value="dashboard">Dashboard</option>
                                 <option value="admin">Admin</option>
+                                <option value="stakeholder">Stakeholder</option>
                             </select>
                         </div>
                         <div>
@@ -273,7 +274,8 @@ export default function UserManagement() {
                                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold uppercase tracking-wider
                                             ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' :
                                                 user.role === 'dashboard' ? 'bg-amber-100 text-amber-700' :
-                                                    'bg-blue-100 text-blue-700'}`}>
+                                                    user.role === 'stakeholder' ? 'bg-indigo-100 text-indigo-700' :
+                                                        'bg-blue-100 text-blue-700'}`}>
                                             <Shield className="h-3 w-3" />
                                             {user.role}
                                         </span>
