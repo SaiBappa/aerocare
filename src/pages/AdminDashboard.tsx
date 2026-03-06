@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AdminSidebar from '../components/AdminSidebar';
-import { Users, MapPin, Coffee, MessageSquare, Activity, AlertTriangle, ArrowUpRight, ShieldAlert, Settings, Megaphone, UserPlus, LogIn, LogOut, QrCode, Clock, Tag, Gift, Download, Loader2, CalendarDays, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
+import { Users, MapPin, Coffee, MessageSquare, Activity, AlertTriangle, ArrowUpRight, ShieldAlert, Settings, Megaphone, UserPlus, LogIn, LogOut, QrCode, Clock, Tag, Gift, Download, Loader2, CalendarDays, RefreshCw, TrendingUp, TrendingDown, PlaneTakeoff } from 'lucide-react';
 import { generateSummaryPDF } from '../utils/generateSummaryPDF';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine
@@ -23,6 +23,7 @@ interface DailyStats {
     totalCheckOuts: number;
     totalQrRenewals: number;
     totalQrExpired: number;
+    totalDeparted?: number;
     totalRegistrations: number;
     netFlow: number;
   };
@@ -170,7 +171,7 @@ export default function AdminDashboard() {
         </header>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-6 mb-10">
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-medium text-slate-500 uppercase tracking-wider">Total Stranded</h3>
@@ -195,6 +196,27 @@ export default function AdminDashboard() {
             <p className="text-sm text-slate-500 mt-2 font-medium">Currently in rest zones</p>
           </div>
 
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-slate-500 uppercase tracking-wider">Checked Out</h3>
+              <div className="h-10 w-10 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center">
+                <LogOut className="h-5 w-5" />
+              </div>
+            </div>
+            <p className="text-4xl font-light text-slate-900">{stats.checkedOut}</p>
+            <p className="text-sm text-slate-500 mt-2 font-medium">Left rest zones</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-slate-500 uppercase tracking-wider">Departed</h3>
+              <div className="h-10 w-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center">
+                <PlaneTakeoff className="h-5 w-5" />
+              </div>
+            </div>
+            <p className="text-4xl font-light text-slate-900">{stats.departed}</p>
+            <p className="text-sm text-slate-500 mt-2 font-medium">Left us</p>
+          </div>
 
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-4">
@@ -414,7 +436,7 @@ export default function AdminDashboard() {
 
           {/* Summary Stats Row */}
           {dailyStats && (
-            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-4 mb-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4 mb-6">
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                 <div className="flex items-center gap-2 mb-2">
                   <LogIn className="h-4 w-4 text-emerald-500" />
@@ -428,6 +450,13 @@ export default function AdminDashboard() {
                   <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Check-Outs</span>
                 </div>
                 <p className="text-2xl font-light text-slate-900">{dailyStats.summary.totalCheckOuts}</p>
+              </div>
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center gap-2 mb-2">
+                  <PlaneTakeoff className="h-4 w-4 text-blue-500" />
+                  <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Departed</span>
+                </div>
+                <p className="text-2xl font-light text-slate-900">{dailyStats.summary.totalDeparted || 0}</p>
               </div>
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                 <div className="flex items-center gap-2 mb-2">

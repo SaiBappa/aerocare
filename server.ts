@@ -473,6 +473,33 @@ async function startServer() {
     const isCheckin = action === 'checkin';
     const isAlreadyCheckedIn = passenger.status === 'checked-in';
 
+    // Verify Passenger QR Code Validity
+    let qr_expiry_minutes = 30;
+    if (isAlreadyCheckedIn) {
+      const { data: extSetting } = await supabase.from('app_settings').select('value').eq('key', 'checkin_extension_minutes').single();
+      qr_expiry_minutes = extSetting ? parseInt(extSetting.value, 10) : 60;
+    } else {
+      const { data: qrExpirySetting } = await supabase.from('app_settings').select('value').eq('key', 'qr_expiry_minutes').single();
+      qr_expiry_minutes = qrExpirySetting ? parseInt(qrExpirySetting.value, 10) : 30;
+    }
+
+    const isDeparted = passenger.status === 'checked-out' && passenger.qr_generated_at === '1970-01-01T00:00:00.000Z';
+    const isRenewal = isCheckin && isAlreadyCheckedIn;
+
+    if (passenger.qr_generated_at && !isRenewal) {
+      const generatedTime = new Date(passenger.qr_generated_at).getTime();
+      const expiryTime = generatedTime + qr_expiry_minutes * 60 * 1000;
+      if (Date.now() > expiryTime || isDeparted) {
+        const error = new Error('Passenger QR code has expired. Please see staff for assistance.');
+        (error as any).status = 400;
+        throw error;
+      }
+    } else if (isDeparted) {
+      const error = new Error('Passenger has already departed.');
+      (error as any).status = 400;
+      throw error;
+    }
+
     // Special case: renewal for already checked in passengers
     if (isCheckin && isAlreadyCheckedIn) {
       await supabase.from('passengers').update({ qr_generated_at: now }).eq('id', passenger.id);
@@ -1222,6 +1249,8 @@ async function startServer() {
   app.get('/api/dashboard', async (req, res) => {
     const { count: totalPassengers } = await supabase.from('passengers').select('*', { count: 'exact', head: true });
     const { count: checkedIn } = await supabase.from('passengers').select('*', { count: 'exact', head: true }).eq('status', 'checked-in');
+    const { count: checkedOut } = await supabase.from('passengers').select('*', { count: 'exact', head: true }).eq('status', 'checked-out');
+    const { count: departed } = await supabase.from('passengers').select('*', { count: 'exact', head: true }).eq('status', 'departed');
 
     // Calculate open requests by finding unique passengers with an 'open' status message
     const { data: openMessages } = await supabase.from('messages').select('passenger_id').eq('status', 'open');
@@ -1239,6 +1268,8 @@ async function startServer() {
     res.json({
       totalPassengers: totalPassengers || 0,
       checkedIn: checkedIn || 0,
+      checkedOut: checkedOut || 0,
+      departed: departed || 0,
       messagesCount: messagesCount || 0,
       locationsOccupancy
     });
@@ -1342,6 +1373,7 @@ async function startServer() {
       let totalCheckOuts = 0;
       let totalQrRenewals = 0;
       let totalQrExpired = 0;
+      let totalDeparted = 0;
 
       const hourlyData: Record<string, { ci: number; co: number; ren: number }> = {};
       for (let h = 0; h < 24; h++) {
@@ -1362,6 +1394,8 @@ async function startServer() {
           totalQrRenewals++;
         } else if (a.type === 'qr-expired') {
           totalQrExpired++;
+        } else if (a.type === 'departed') {
+          totalDeparted++;
         }
       });
 
@@ -1394,6 +1428,7 @@ async function startServer() {
           totalCheckOuts,
           totalQrRenewals,
           totalQrExpired,
+          totalDeparted,
           totalRegistrations: totalRegistrations || 0,
           netFlow: totalCheckIns - totalCheckOuts,
         },
@@ -2226,6 +2261,40 @@ async function startServer() {
     }
   });
 
+  // ───── Mark Passenger as Departed ─────
+  app.post('/api/admin/passengers/:id/depart', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid passenger ID' });
+    }
+
+    try {
+      const { data: passenger } = await supabase.from('passengers').select('*').eq('id', id).single();
+      if (!passenger) {
+        return res.status(404).json({ error: 'Passenger not found' });
+      }
+
+      // Expire the QR code instantly by setting qr_generated_at to a date far in the past
+      await supabase.from('passengers').update({
+        status: 'checked-out',
+        qr_generated_at: '1970-01-01T00:00:00.000Z'
+      }).eq('id', id);
+
+      await supabase.from('activity_log').insert({
+        type: 'departed',
+        description: `${passenger.name || 'Passenger'} departed`,
+        passenger_id: passenger.id,
+        passenger_name: passenger.name,
+        timestamp: new Date().toISOString()
+      });
+
+      res.json({ success: true, message: 'Passenger marked as departed and QR expired' });
+    } catch (error) {
+      console.error('Failed to mark passenger as departed:', error);
+      res.status(500).json({ error: 'Failed to mark passenger as departed' });
+    }
+  });
+
   // ───── Update Passenger Details ─────
   app.patch('/api/admin/passengers/:id/details', async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -2303,6 +2372,7 @@ async function startServer() {
       let registered = 0;
       let checkedIn = 0;
       let checkedOut = 0;
+      let departed = 0;
 
       const airlineCounts: Record<string, number> = {};
       const nationalityCounts: Record<string, number> = {};
@@ -2313,7 +2383,15 @@ async function startServer() {
         total++;
         if (p.status === 'registered') registered++;
         if (p.status === 'checked-in') checkedIn++;
-        if (p.status === 'checked-out') checkedOut++;
+
+        // A passenger is explicitly "departed" if status is checked-out and qr_generated_at is the unix epoch
+        if (p.status === 'checked-out') {
+          if (p.qr_generated_at === '1970-01-01T00:00:00.000Z') {
+            departed++;
+          } else {
+            checkedOut++;
+          }
+        }
 
         if (p.departure_airline) airlineCounts[p.departure_airline] = (airlineCounts[p.departure_airline] || 0) + 1;
         if (p.nationality) nationalityCounts[p.nationality] = (nationalityCounts[p.nationality] || 0) + 1;
@@ -2336,6 +2414,7 @@ async function startServer() {
         { label: 'Registered', value: registered, color: '#6366f1' },
         { label: 'Checked In', value: checkedIn, color: '#10b981' },
         { label: 'Checked Out', value: checkedOut, color: '#f59e0b' },
+        { label: 'Departed', value: departed, color: '#ef4444' },
       ];
 
       const registrationTimeline = Object.entries(timelineCounts)

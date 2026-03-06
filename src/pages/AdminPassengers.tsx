@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
     Search, Filter, ChevronLeft, ChevronRight, ArrowUpDown,
     Plane, Globe, MapPin, UserCheck, UserX,
-    Tag, Eye, X, Calendar, TrendingUp, BarChart3, Users, Activity, Download, Edit, Save
+    Tag, Eye, X, Calendar, TrendingUp, BarChart3, Users, Activity, Download, Edit, Save, LogOut
 } from 'lucide-react';
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -49,6 +49,7 @@ interface StatsData {
     registered: number;
     checkedIn: number;
     checkedOut: number;
+    departed: number;
     totalMessages: number;
     byAirline: { label: string; value: number }[];
     byNationality: { label: string; value: number }[];
@@ -134,6 +135,26 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
             console.error('Failed to update details:', err);
         } finally {
             setDetailsSaving(false);
+        }
+    };
+
+    const [departSaving, setDepartSaving] = useState(false);
+
+    const handleDepart = async () => {
+        if (!canWrite) return;
+        if (!window.confirm('Are you sure you want to mark this passenger as Departed? This will instantly expire their QR code.')) return;
+        setDepartSaving(true);
+        try {
+            const res = await fetch(`/api/admin/passengers/${passenger.id}/depart`, {
+                method: 'POST',
+            });
+            if (!res.ok) throw new Error('Failed to mark as departed');
+            if (onUpdate) onUpdate();
+        } catch (err) {
+            console.error('Failed to mark as departed:', err);
+            window.alert('Failed to mark as departed');
+        } finally {
+            setDepartSaving(false);
         }
     };
 
@@ -250,6 +271,16 @@ function PassengerDrawer({ passenger, onClose, onUpdate, canWrite }: { passenger
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
+                        {canWrite && !isEditing && passenger.status !== 'checked-out' && (
+                            <button
+                                onClick={handleDepart}
+                                disabled={departSaving}
+                                title="Mark as Departed"
+                                className="p-2 hover:bg-rose-50 rounded-xl transition-colors disabled:opacity-50"
+                            >
+                                {departSaving ? <span className="animate-spin h-5 w-5 border border-rose-500 border-t-transparent rounded-full inline-block" /> : <LogOut className="h-5 w-5 text-rose-500" />}
+                            </button>
+                        )}
                         {canWrite && !isEditing && (
                             <button onClick={() => setIsEditing(true)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
                                 <Edit className="h-5 w-5 text-indigo-500" />
@@ -657,17 +688,6 @@ export default function AdminPassengers() {
 
                             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                                 <div className="flex items-center justify-between mb-3">
-                                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Registered</h3>
-                                    <div className="h-9 w-9 bg-violet-50 text-violet-500 rounded-xl flex items-center justify-center">
-                                        <TrendingUp className="h-4.5 w-4.5" />
-                                    </div>
-                                </div>
-                                <p className="text-3xl font-bold text-slate-900">{stats.registered}</p>
-                                <p className="text-xs text-slate-400 mt-1 font-medium">Awaiting check-in</p>
-                            </div>
-
-                            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                                <div className="flex items-center justify-between mb-3">
                                     <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Checked In</h3>
                                     <div className="h-9 w-9 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center">
                                         <UserCheck className="h-4.5 w-4.5" />
@@ -685,7 +705,18 @@ export default function AdminPassengers() {
                                     </div>
                                 </div>
                                 <p className="text-3xl font-bold text-slate-900">{stats.checkedOut}</p>
-                                <p className="text-xs text-slate-400 mt-1 font-medium">Departed</p>
+                                <p className="text-xs text-slate-400 mt-1 font-medium">Left rest zones</p>
+                            </div>
+
+                            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                                <div className="flex items-center justify-between mb-3">
+                                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Departed</h3>
+                                    <div className="h-9 w-9 bg-red-50 text-red-500 rounded-xl flex items-center justify-center">
+                                        <LogOut className="h-4.5 w-4.5" />
+                                    </div>
+                                </div>
+                                <p className="text-3xl font-bold text-slate-900">{stats.departed || 0}</p>
+                                <p className="text-xs text-slate-400 mt-1 font-medium">Left us</p>
                             </div>
                         </div>
 
